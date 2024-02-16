@@ -1,5 +1,5 @@
 from library.util.io import write_file
-from library.constants.folders import FILE_METADATA_AI_CORE_KEY
+from library.constants.folders import FILE_METADATA_AI_CORE_KEY, FILE_ENV
 
 from library.model.aicore import AiCoreMetadataJsonEncoder
 from library.fetch.aicore import AiCoreMetadata
@@ -17,7 +17,7 @@ initLogger()
 def main():
     log.header("Preparing the environment for the AI Core and HANA Cloud system.")
 
-    load_dotenv()
+    load_dotenv(dotenv_path=str(FILE_ENV), verbose=True)
 
     # Extract the metadata for the AI Core system from the terraform state file
     ai_core_metadata = AiCoreMetadata()

@@ -1,12 +1,30 @@
+from dataclasses import dataclass
+from library.model.aicore import AiCoreMetadata as AiCoreMetadataDefinition
+import os
+import logging
 import json
 import time
 import requests
 import base64
-from library.model.aicore import AiCoreMetadata as AiCoreMetadataDefinition
+import sys
 from library.constants.timings import RETRY_TIME_IN_SECONDS_AICORE_DEPLOYMENT_URL
-import logging
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class AiCoreMetadata(AiCoreMetadataDefinition):
+    def __init__(self):
+        self.authUrl = os.environ.get("AICORE_LLM_AUTH_URL")
+        self.clientId = os.environ.get("AICORE_LLM_CLIENT_ID")
+        self.clientSecret = os.environ.get("AICORE_LLM_CLIENT_SECRET")
+        self.resourceGroup = os.environ.get("AICORE_LLM_RESOURCE_GROUP")
+        self.apiBase = os.environ.get("AICORE_LLM_API_BASE")
+        self.targetAiCoreModel = json.loads(os.environ.get("TARGET_AI_CORE_MODEL"))
+        self.apiAccessToken = get_api_access_token(self)
+        self.availableModels = get_available_ai_models(self)
+        self.configurationIds = create_configuration(self)
+        self.deployment = create_deployments(self)
 
 
 # Retrieve the access token from the AI Core system
@@ -33,11 +51,16 @@ def get_api_access_token(aiCoreMetadata: AiCoreMetadataDefinition) -> str:
         # Send the request to retrieve the access token
         r = requests.post(url=aiCoreLocation, headers=headers)
         # Retrieve the access token from the response
-        token = r.json()["access_token"]
-        return token
-    except requests.exceptions.RequestException as e:
-        log.warning(str(e))
-        return None
+        if r.ok is True:
+            token = r.json()["access_token"]
+            return token
+        else:
+            log.info(f"Response status code: {r.status_code} ({r.reason}): {r.text}")
+            log.error("Could not retrieve access token from AI Core system! Exiting...")
+            sys.exit(1)
+    except requests.exceptions.RequestException:
+        log.error("Could not retrieve access token from AI Core system! Exiting...")
+        sys.exit(1)
 
 
 # Retrieve the available AI models from the AI Core system
@@ -48,18 +71,30 @@ def get_available_ai_models(aiCoreMetadata: AiCoreMetadataDefinition) -> str:
     # Create the URL to retrieve the available AI models
     aiCoreLocation = f"{apiBase}/v2/lm/scenarios/foundation-models/executables"
     # Create the headers for the request
-    headers = {"AI-Resource-Group": "default", "Authorization": f"Bearer {token}"}
+    headers = {
+        "AI-Resource-Group": aiCoreMetadata.resourceGroup,
+        "Authorization": f"Bearer {token}",
+    }
 
     # Retrieve the available AI models from the AI Core system
     try:
         # Send the request to retrieve the available AI models
+        log.info("Retrieving available AI models from AI Core system...")
         r = requests.get(url=aiCoreLocation, headers=headers)
-        # Retrieve the available AI models from the response
-        models = r.json()
-        return models
+        if r.ok is True:
+            # Retrieve the available AI models from the response
+            models = r.json()
+            return models
+        else:
+            log.info(f"Response status code: {r.status_code} ({r.reason}): {r.text}")
+            log.error(
+                "Could not retrieve available AI models from AI Core system! Exiting..."
+            )
+            sys.exit(1)
     except requests.exceptions.RequestException as e:
         log.warning(str(e))
-        return None
+        log.error(f"No resources found with available models. {str(e)}. Exiting...")
+        sys.exit(1)
 
 
 # Create the configurations for the AI models in the AI Core system
@@ -77,6 +112,14 @@ def create_configuration(aiCoreMetadata: AiCoreMetadataDefinition) -> str:
     headers["AI-Resource-Group"] = resourceGroup
     headers["Content-Type"] = "application/json"
     headers["Authorization"] = f"Bearer {token}"
+
+    if (
+        aiCoreMetadata.availableModels is None
+        or aiCoreMetadata.availableModels.get("resources") is None
+        or len(aiCoreMetadata.availableModels["resources"]) == 0
+    ):
+        log.error("No available resources found! with available models. Exiting...")
+        exit(1)
 
     # Loop through the available models and find the one that matches the target model
     for model in aiCoreMetadata.availableModels["resources"]:
@@ -97,12 +140,22 @@ def create_configuration(aiCoreMetadata: AiCoreMetadataDefinition) -> str:
                     # Create the configuration in the AI Core system
                     try:
                         # Send the request to create the configuration
+                        log.info(f"Creating configuration for '{targetAiCoreModel}'...")
                         r = requests.post(
                             url=aiCoreLocation, headers=headers, data=json.dumps(data)
                         )
-                        # Retrieve the configuration from the response
-                        configuration = r.json()
-                        configurationIDs.append(configuration["id"])
+                        if r.ok is True:
+                            # Retrieve the configuration from the response
+                            configuration = r.json()
+                            configurationIDs.append(configuration["id"])
+                        else:
+                            log.info(
+                                f"Response status code: {r.status_code} ({r.reason}): {r.text}"
+                            )
+                            log.error(
+                                f"Could not create configuration for '{targetAiCoreModel}'! Exiting..."
+                            )
+                            sys.exit(1)
                     except requests.exceptions.RequestException as e:
                         log.warning(str(e))
 
@@ -134,12 +187,22 @@ def create_deployments(aiCoreMetadata: AiCoreMetadataDefinition) -> list:
 
         try:
             # Send the request to create the deployment
+            log.info(f"Creating deployment for configuration '{configurationId}'...")
             r = requests.post(
                 url=aiCoreLocation, headers=headers, data=json.dumps(data)
             )
-            # Retrieve the configuration from the response
-            deployment = r.json()
-            deploymentIds.append(deployment["id"])
+            if r.ok is True:
+                # Retrieve the configuration from the response
+                deployment = r.json()
+                deploymentIds.append(deployment["id"])
+            else:
+                log.info(
+                    f"Response status code: {r.status_code} ({r.reason}): {r.text}"
+                )
+                log.error(
+                    f"Could not create deployment for configuration '{configurationId}'! Exiting..."
+                )
+                sys.exit(1)
         except requests.exceptions.RequestException as e:
             log.warning(str(e))
 
@@ -168,15 +231,26 @@ def get_deployment_details(aiCoreMetadata: AiCoreMetadataDefinition, deploymenId
     while deploymentUrl == "":
         try:
             # Send the request to create the deployment
+            log.info(f"Retrieving deployment details for id '{deploymenId}'...")
             r = requests.get(url=aiCoreLocation, headers=headers)
-            # Retrieve the configuration from the response
-            deploymentDetails = r.json()
-            log.info(
-                f"waiting to get AI Core endpoint setup for '{deploymenId}' (trying every {str(RETRY_TIME_IN_SECONDS_AICORE_DEPLOYMENT_URL)} seconds) ..."
-            )
-            # print(f"waiting to get AI Core endpoint setup for '{deploymenId}' (trying every {str(RETRY_TIME_IN_SECONDS_AICORE_DEPLOYMENT_URL)} seconds) ...")
-            time.sleep(RETRY_TIME_IN_SECONDS_AICORE_DEPLOYMENT_URL)
-            deploymentUrl = deploymentDetails["deploymentUrl"]
+            if r.ok is True:
+                # Retrieve the configuration from the response
+                deploymentDetails = r.json()
+                log.info(
+                    f"waiting to get AI Core endpoint setup for '{deploymenId}' (trying every {str(RETRY_TIME_IN_SECONDS_AICORE_DEPLOYMENT_URL)} seconds) ..."
+                )
+                # print(f"waiting to get AI Core endpoint setup for '{deploymenId}' (trying every {str(RETRY_TIME_IN_SECONDS_AICORE_DEPLOYMENT_URL)} seconds) ...")
+                time.sleep(RETRY_TIME_IN_SECONDS_AICORE_DEPLOYMENT_URL)
+                deploymentUrl = deploymentDetails["deploymentUrl"]
+            else:
+                log.info(
+                    f"Response status code: {r.status_code} ({r.reason}): {r.text}"
+                )
+                log.error(
+                    f"Could not retrieve deployment details for id '{deploymenId}'! Exiting..."
+                )
+                sys.exit(1)
+
         except requests.exceptions.RequestException as e:
             log.warning(str(e))
             return None

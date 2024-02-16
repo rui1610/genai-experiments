@@ -1,8 +1,4 @@
-from constants.folders import (
-    FILE_METADATA_AI_CORE_KEY,
-    FILE_METADATA_HANA_CLOUD,
-    FILE_ENV_VARIABLES_USE,
-)
+from library.constants.folders import FILE_METADATA_AI_CORE_KEY
 from pathlib import Path
 import logging
 import json
